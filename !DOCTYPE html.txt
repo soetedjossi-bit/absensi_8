@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>E-Presensi Siswa Mandiri</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .camera-box { position: relative; width: 100%; height: 260px; background: #000; border-radius: 1.5rem; overflow: hidden; }
+        #video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+        .admin-modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.8); z-index: 50; align-items: center; justify-content: center; padding: 20px; }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen flex items-center justify-center p-4">
+
+    <div class="w-full max-w-md bg-white rounded-[2.5rem] shadow-2xl overflow-hidden relative">
+        <div class="bg-blue-600 p-6 text-white text-center">
+            <h1 class="text-xl font-bold tracking-tight">E-PRESENSI SISWA</h1>
+            <p id="displayTime" class="text-blue-100 text-xs font-mono mt-1">Memuat waktu...</p>
+        </div>
+
+        <div class="p-6 space-y-4">
+            <select id="classSelect" onchange="loadStudents()" class="w-full p-4 bg-gray-50 border-2 border-gray-100 rounded-2xl outline-none focus:border-blue-500 font-bold transition-all cursor-pointer">
+                <option value="">-- MEMUAT KELAS... --</option>
+            </select>
+
+            <select id="studentSelect" class="w-full p-4 bg-gray-50 border-2 border-gray-100 rounded-2xl outline-none focus:border-blue-500 font-bold transition-all cursor-pointer">
+                <option value="">-- Pilih Nama --</option>
+            </select>
+
+            <div class="camera-box">
+                <video id="video" autoplay playsinline muted></video>
+                <canvas id="canvas" class="hidden"></canvas>
+                
+                <div id="cameraStatus" class="absolute inset-0 flex flex-col items-center justify-center bg-gray-900 text-center p-6 z-10">
+                    <button onclick="setupCamera()" class="px-6 py-3 bg-blue-500 text-white rounded-xl text-sm font-bold shadow-lg active:scale-95 transition-transform">AKTIFKAN KAMERA</button>
+                    <p id="camError" class="text-red-400 text-xs mt-3 hidden"></p>
+                </div>
+                
+                <div id="gps-info" class="absolute bottom-3 left-3 bg-black/60 text-white text-[10px] px-3 py-1 rounded-full font-mono z-20">📍 Mencari GPS...</div>
+            </div>
+
+            <button onclick="handleSubmit()" id="btnSubmit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-2xl shadow-lg transition-all flex items-center justify-center gap-3">
+                SUBMIT KEHADIRAN
+            </button>
+
+            <div id="statusMsg" class="text-center text-xs font-bold py-3 rounded-xl hidden"></div>
+        </div>
+
+        <button onclick="openAdmin()" class="absolute bottom-4 right-4 text-gray-300 hover:text-blue-500 transition-colors">
+            <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clip-rule="evenodd"></path></svg>
+        </button>
+    </div>
+
+    <!-- Modal Admin -->
+    <div id="adminPanel" class="admin-modal">
+        <div class="bg-white w-full max-w-xs rounded-3xl p-6 space-y-4">
+            <h2 class="text-lg font-bold text-center text-gray-800">PENGATURAN ADMIN</h2>
+            <div>
+                <label class="text-[10px] font-bold text-gray-400 uppercase">Jam Masuk</label>
+                <input type="time" id="setJamMasuk" class="w-full p-3 bg-gray-100 rounded-xl mt-1 font-bold">
+            </div>
+            <div>
+                <label class="text-[10px] font-bold text-gray-400 uppercase">Password Admin Baru</label>
+                <input type="password" id="setPass" class="w-full p-3 bg-gray-100 rounded-xl mt-1 font-bold">
+            </div>
+            <div class="flex gap-2 pt-2">
+                <button onclick="closeAdmin()" class="flex-1 py-3 bg-gray-200 rounded-xl font-bold text-sm">BATAL</button>
+                <button onclick="processSaveSettings()" class="flex-1 py-3 bg-blue-600 text-white rounded-xl font-bold text-sm">SIMPAN</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // TEMPELKAN URL WEB APP GOOGLE SCRIPT ANDA DI BAWAH INI
+        const API_URL = "https://script.google.com/macros/s/AKfycbxKGF9aBEU5vdp_cw7A_kcNSig-4xVPPoSysIHMFOYcGaAeQev_Hwywn6YzZ636rLDw/exec";
+
+        let currentGPS = "Mencari...";
+        let studentData = [];
+        let adminSettings = { Jam_Masuk: "07:00", Admin_Password: "1234" };
+
+        window.onload = () => {
+            setInterval(() => {
+                document.getElementById('displayTime').innerText = new Date().toLocaleString('id-ID');
+            }, 1000);
+            loadClasses();
+            setupGPS();
+            fetchJSONP(`${API_URL}?action=getSettings`, (s) => { if(s) adminSettings = s; });
+        };
+
+        function fetchJSONP(url, callback) {
+            const callbackName = 'jsonp_' + Math.round(100000 * Math.random());
+            window[callbackName] = function(data) {
+                delete window[callbackName];
+                document.body.removeChild(script);
+                callback(data);
+            };
+            const script = document.createElement('script');
+            script.src = url + (url.indexOf('?') >= 0 ? '&' : '?') + 'callback=' + callbackName;
+            document.body.appendChild(script);
+        }
+
+        function loadClasses() {
+            fetchJSONP(`${API_URL}?action=getClasses`, (classes) => {
+                const sel = document.getElementById('classSelect');
+                if (!classes || classes.length === 0) {
+                    sel.innerHTML = '<option value="">(Data Siswa Kosong)</option>';
+                    return;
+                }
+                sel.innerHTML = '<option value="">-- Pilih Kelas --</option>';
+                classes.forEach(c => sel.innerHTML += `<option value="${c}">${c}</option>`);
+            });
+        }
+
+        function loadStudents() {
+            const className = document.getElementById('classSelect').value;
+            const sel = document.getElementById('studentSelect');
+            if (!className) { sel.innerHTML = '<option value="">-- Pilih Nama --</option>'; return; }
+            sel.innerHTML = '<option value="">Memuat nama...</option>';
+            
+            fetchJSONP(`${API_URL}?action=getStudents&className=${encodeURIComponent(className)}`, (students) => {
+                studentData = students;
+                sel.innerHTML = '<option value="">-- Pilih Nama --</option>';
+                students.forEach(s => sel.innerHTML += `<option value="${s.id}">${s.name}</option>`);
+            });
+        }
+
+        async function setupCamera() {
+            const video = document.getElementById('video');
+            const statusBox = document.getElementById('cameraStatus');
+            const errEl = document.getElementById('camError');
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false });
+                video.srcObject = stream;
+                statusBox.style.display = 'none';
+            } catch (err) {
+                try {
+                    const fallback = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+                    video.srcObject = fallback;
+                    statusBox.style.display = 'none';
+                    video.style.transform = "none";
+                } catch(e) {
+                    errEl.innerText = "Gagal mengakses hardware kamera.";
+                    errEl.classList.remove('hidden');
+                }
+            }
+        }
+
+        function setupGPS() {
+            if (navigator.geolocation) {
+                navigator.geolocation.watchPosition(pos => {
+                    currentGPS = `${pos.coords.latitude.toFixed(6)}, ${pos.coords.longitude.toFixed(6)}`;
+                    document.getElementById('gps-info').innerText = `📍 GPS: ${currentGPS}`;
+                }, () => {
+                    document.getElementById('gps-info').innerText = `📍 GPS: Aktifkan Lokasi HP`;
+                }, { enableHighAccuracy: true });
+            }
+        }
+
+        function handleSubmit() {
+            const studentId = document.getElementById('studentSelect').value;
+            const className = document.getElementById('classSelect').value;
+            const student = studentData.find(s => s.id == studentId);
+            if (!className || !studentId || !student) return alert("Pilih Kelas dan Nama!");
+            
+            const video = document.getElementById('video');
+            if (!video.srcObject) return alert("Kamera belum aktif!");
+
+            const btn = document.getElementById('btnSubmit');
+            const msg = document.getElementById('statusMsg');
+            btn.disabled = true; btn.innerText = "SEDANG MEMPROSES...";
+
+            const canvas = document.getElementById('canvas');
+            canvas.width = video.videoWidth || 640; canvas.height = video.videoHeight || 480;
+            const ctx = canvas.getContext('2d');
+            if (video.style.transform !== "none") { ctx.translate(canvas.width, 0); ctx.scale(-1, 1); }
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+
+            ctx.fillStyle = "rgba(0, 0, 0, 0.6)"; ctx.fillRect(0, canvas.height - 90, canvas.width, 90);
+            ctx.fillStyle = "#ffffff"; ctx.font = "bold 16px Arial";
+            ctx.fillText(`Nama: ${student.name} (${className})`, 20, canvas.height - 60);
+            ctx.fillText(`Waktu: ${new Date().toLocaleString('id-ID')}`, 20, canvas.height - 35);
+            ctx.fillText(`Lokasi: ${currentGPS}`, 20, canvas.height - 15);
+
+            const payload = {
+                action: "record", studentId: studentId, studentName: student.name,
+                className: className, parentEmail: student.email, gps: currentGPS,
+                image: canvas.toDataURL('image/jpeg', 0.5)
+            };
+
+            fetch(API_URL, { method: "POST", body: JSON.stringify(payload) })
+            .then(res => res.json())
+            .then(res => {
+                msg.innerText = res.message;
+                msg.className = `text-center text-xs font-bold p-4 rounded-2xl border mt-4 ${res.success ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`;
+                msg.classList.remove('hidden');
+                if (res.success) setTimeout(() => { location.reload(); }, 3000);
+                else { btn.disabled = false; btn.innerText = "SUBMIT KEHADIRAN"; }
+            }).catch(() => {
+                alert("Gagal terhubung ke server.");
+                btn.disabled = false; btn.innerText = "SUBMIT KEHADIRAN";
+            });
+        }
+
+        function openAdmin() {
+            const pass = prompt("Masukkan Password Admin:");
+            if (pass === adminSettings.Admin_Password.toString()) {
+                document.getElementById('setJamMasuk').value = adminSettings.Jam_Masuk;
+                document.getElementById('setPass').value = adminSettings.Admin_Password;
+                document.getElementById('adminPanel').style.display = 'flex';
+            }
+        }
+        function closeAdmin() { document.getElementById('adminPanel').style.display = 'none'; }
+        function processSaveSettings() {
+            const jam = document.getElementById('setJamMasuk').value;
+            const pass = document.getElementById('setPass').value;
+            fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "saveSettings", jam: jam, pass: pass }) })
+            .then(res => res.json()).then(res => { alert(res.message); location.reload(); });
+        }
+    </script>
+</body>
+</html>
