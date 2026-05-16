@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>E-Presensi Siswa Mandiri</title>
+    <title>E-Presensi Proteksi Jarak Berbasis Sheet</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
     <style>
@@ -42,6 +42,11 @@
                 <div id="gps-info" class="absolute bottom-3 left-3 bg-black/60 text-white text-[10px] px-3 py-1 rounded-full font-mono z-20">📍 Mencari GPS...</div>
             </div>
 
+            <!-- Tampilan Info Jarak Sinkronisasi Sheet -->
+            <div id="distanceBox" class="p-3 rounded-xl text-center text-xs font-bold bg-gray-100 text-gray-600 border border-gray-200">
+                Menghitung jarak Anda ke Sekolah...
+            </div>
+
             <button onclick="handleSubmit()" id="btnSubmit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-2xl shadow-lg transition-all flex items-center justify-center gap-3">
                 SUBMIT KEHADIRAN
             </button>
@@ -54,17 +59,29 @@
         </button>
     </div>
 
-    <!-- Modal Admin -->
+    <!-- Modal Panel Admin Modern -->
     <div id="adminPanel" class="admin-modal">
-        <div class="bg-white w-full max-w-xs rounded-3xl p-6 space-y-4">
-            <h2 class="text-lg font-bold text-center text-gray-800">PENGATURAN ADMIN</h2>
+        <div class="bg-white w-full max-w-sm rounded-3xl p-6 space-y-3 max-h-[90vh] overflow-y-auto">
+            <h2 class="text-lg font-bold text-center text-gray-800">PENGATURAN SINKRONISASI SHEET</h2>
             <div>
                 <label class="text-[10px] font-bold text-gray-400 uppercase">Jam Masuk</label>
-                <input type="time" id="setJamMasuk" class="w-full p-3 bg-gray-100 rounded-xl mt-1 font-bold">
+                <input type="time" id="setJamMasuk" class="w-full p-2.5 bg-gray-100 rounded-xl mt-1 font-bold">
+            </div>
+            <div>
+                <label class="text-[10px] font-bold text-gray-400 uppercase">Latitude Target Sekolah</label>
+                <input type="text" id="setLat" class="w-full p-2.5 bg-gray-100 rounded-xl mt-1 font-mono text-xs">
+            </div>
+            <div>
+                <label class="text-[10px] font-bold text-gray-400 uppercase">Longitude Target Sekolah</label>
+                <input type="text" id="setLng" class="w-full p-2.5 bg-gray-100 rounded-xl mt-1 font-mono text-xs">
+            </div>
+            <div>
+                <label class="text-[10px] font-bold text-gray-400 uppercase">Maksimal Radius (Meter)</label>
+                <input type="number" id="setRad" class="w-full p-2.5 bg-gray-100 rounded-xl mt-1 font-bold">
             </div>
             <div>
                 <label class="text-[10px] font-bold text-gray-400 uppercase">Password Admin Baru</label>
-                <input type="password" id="setPass" class="w-full p-3 bg-gray-100 rounded-xl mt-1 font-bold">
+                <input type="password" id="setPass" class="w-full p-2.5 bg-gray-100 rounded-xl mt-1 font-bold">
             </div>
             <div class="flex gap-2 pt-2">
                 <button onclick="closeAdmin()" class="flex-1 py-3 bg-gray-200 rounded-xl font-bold text-sm">BATAL</button>
@@ -74,12 +91,14 @@
     </div>
 
     <script>
-        // TEMPELKAN URL WEB APP GOOGLE SCRIPT ANDA DI BAWAH INI
-        const API_URL = "https://script.google.com/macros/s/AKfycbxKGF9aBEU5vdp_cw7A_kcNSig-4xVPPoSysIHMFOYcGaAeQev_Hwywn6YzZ636rLDw/exec";
+        // TEMPELKAN URL WEB APP GOOGLE SCRIPT BARU ANDA DI BAWAH INI
+        const API_URL = "https://script.google.com/macros/s/AKfycbwltb5XsXZDE-PkpUmTSgj0bZNjSwvoMn33KuombM6IlUPcxZUHbijdR5zwT-4PORXp/exec";
 
         let currentGPS = "Mencari...";
+        let userLat = null, userLng = null;
         let studentData = [];
-        let adminSettings = { Jam_Masuk: "07:00", Admin_Password: "1234" };
+        let isWithinRange = false;
+        let adminSettings = { Jam_Masuk: "07:00", Admin_Password: "1234", Target_Latitude: 0.5057, Target_Longitude: 101.4633, Maks_Radius_Meter: 100 };
 
         window.onload = () => {
             setInterval(() => {
@@ -87,7 +106,12 @@
             }, 1000);
             loadClasses();
             setupGPS();
-            fetchJSONP(`${API_URL}?action=getSettings`, (s) => { if(s) adminSettings = s; });
+            fetchJSONP(`${API_URL}?action=getSettings`, (s) => { 
+                if(s) {
+                    adminSettings = s;
+                    checkDistanceAndValidation();
+                }
+            });
         };
 
         function fetchJSONP(url, callback) {
@@ -102,13 +126,48 @@
             document.body.appendChild(script);
         }
 
+        // RUMUS HAVERSINE: Menghitung jarak lurus titik koordinat bumi dalam satuan Meter
+        function calculateDistance(lat1, lon1, lat2, lon2) {
+            const R = 6371000; // Jari-jari bumi dalam meter
+            const dLat = (lat2 - lat1) * Math.PI / 180;
+            const dLon = (lon2 - lon1) * Math.PI / 180;
+            const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                      Math.sin(dLon/2) * Math.sin(dLon/2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+            return R * c; 
+        }
+
+        function checkDistanceAndValidation() {
+            if (!userLat || !userLng) return;
+            
+            const targetLat = parseFloat(adminSettings.Target_Latitude);
+            const targetLng = parseFloat(adminSettings.Target_Longitude);
+            const maxRadius = parseFloat(adminSettings.Maks_Radius_Meter);
+
+            const distance = calculateDistance(userLat, userLng, targetLat, targetLng);
+            const distBox = document.getElementById('distanceBox');
+            const btn = document.getElementById('btnSubmit');
+
+            if (distance <= maxRadius) {
+                isWithinRange = true;
+                distBox.className = "p-3 rounded-xl text-center text-xs font-bold bg-green-100 text-green-800 border border-green-200";
+                distBox.innerText = `✅ Anda berada di area sekolah (Jarak: ${distance.toFixed(1)} meter dari target)`;
+                btn.disabled = false;
+                btn.className = "w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-2xl shadow-lg transition-all flex items-center justify-center gap-3";
+            } else {
+                isWithinRange = false;
+                distBox.className = "p-3 rounded-xl text-center text-xs font-bold bg-red-100 text-red-800 border border-red-200";
+                distBox.innerText = `❌ Jarak Anda terlalu jauh! (${distance.toFixed(1)} meter). Maksimal radius: ${maxRadius} meter.`;
+                btn.disabled = true;
+                btn.className = "w-full bg-gray-400 text-white font-bold py-4 rounded-2xl shadow-lg cursor-not-allowed flex items-center justify-center gap-3";
+            }
+        }
+
         function loadClasses() {
             fetchJSONP(`${API_URL}?action=getClasses`, (classes) => {
                 const sel = document.getElementById('classSelect');
-                if (!classes || classes.length === 0) {
-                    sel.innerHTML = '<option value="">(Data Siswa Kosong)</option>';
-                    return;
-                }
+                if (!classes || classes.length === 0) { sel.innerHTML = '<option value="">(Data Siswa Kosong)</option>'; return; }
                 sel.innerHTML = '<option value="">-- Pilih Kelas --</option>';
                 classes.forEach(c => sel.innerHTML += `<option value="${c}">${c}</option>`);
             });
@@ -119,7 +178,6 @@
             const sel = document.getElementById('studentSelect');
             if (!className) { sel.innerHTML = '<option value="">-- Pilih Nama --</option>'; return; }
             sel.innerHTML = '<option value="">Memuat nama...</option>';
-            
             fetchJSONP(`${API_URL}?action=getStudents&className=${encodeURIComponent(className)}`, (students) => {
                 studentData = students;
                 sel.innerHTML = '<option value="">-- Pilih Nama --</option>';
@@ -151,15 +209,20 @@
         function setupGPS() {
             if (navigator.geolocation) {
                 navigator.geolocation.watchPosition(pos => {
-                    currentGPS = `${pos.coords.latitude.toFixed(6)}, ${pos.coords.longitude.toFixed(6)}`;
+                    userLat = pos.coords.latitude;
+                    userLng = pos.coords.longitude;
+                    currentGPS = `${userLat.toFixed(6)}, ${userLng.toFixed(6)}`;
                     document.getElementById('gps-info').innerText = `📍 GPS: ${currentGPS}`;
+                    checkDistanceAndValidation();
                 }, () => {
-                    document.getElementById('gps-info').innerText = `📍 GPS: Aktifkan Lokasi HP`;
+                    document.getElementById('gps-info').innerText = `📍 GPS: Izinkan Lokasi HP!`;
                 }, { enableHighAccuracy: true });
             }
         }
 
         function handleSubmit() {
+            if(!isWithinRange) { alert("Anda berada di luar jangkauan lokasi sekolah!"); return; }
+
             const studentId = document.getElementById('studentSelect').value;
             const className = document.getElementById('classSelect').value;
             const student = studentData.find(s => s.id == studentId);
@@ -200,7 +263,7 @@
                 if (res.success) setTimeout(() => { location.reload(); }, 3000);
                 else { btn.disabled = false; btn.innerText = "SUBMIT KEHADIRAN"; }
             }).catch(() => {
-                alert("Gagal terhubung ke server.");
+                alert("Gagal mengirim data.");
                 btn.disabled = false; btn.innerText = "SUBMIT KEHADIRAN";
             });
         }
@@ -210,14 +273,25 @@
             if (pass === adminSettings.Admin_Password.toString()) {
                 document.getElementById('setJamMasuk').value = adminSettings.Jam_Masuk;
                 document.getElementById('setPass').value = adminSettings.Admin_Password;
+                document.getElementById('setLat').value = adminSettings.Target_Latitude;
+                document.getElementById('setLng').value = adminSettings.Target_Longitude;
+                document.getElementById('setRad').value = adminSettings.Maks_Radius_Meter;
                 document.getElementById('adminPanel').style.display = 'flex';
-            }
+            } else if(pass !== null) { alert("Password Salah!"); }
         }
         function closeAdmin() { document.getElementById('adminPanel').style.display = 'none'; }
+        
         function processSaveSettings() {
             const jam = document.getElementById('setJamMasuk').value;
             const pass = document.getElementById('setPass').value;
-            fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "saveSettings", jam: jam, pass: pass }) })
+            const lat = document.getElementById('setLat').value;
+            const lng = document.getElementById('setLng').value;
+            const rad = document.getElementById('setRad').value;
+            
+            fetch(API_URL, { 
+                method: "POST", 
+                body: JSON.stringify({ action: "saveSettings", jam: jam, pass: pass, lat: lat, lng: lng, rad: rad }) 
+            })
             .then(res => res.json()).then(res => { alert(res.message); location.reload(); });
         }
     </script>
